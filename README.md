@@ -1,5 +1,2 @@
 # cds-service-test
-A quick/easy cds-service to experiment with.
-
-1. This is from me!
-2. And this is from branch!
+This is my first attempt at a CDS Service. Not a whole lot is going on here. Basically, all we really do is beautify the Immunizations endpoint.
