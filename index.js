@@ -74,7 +74,7 @@ function handle_all(req, res) {
 }
 
 // Handle the request for options of the patientService endpoint
-function options_patient_view(req, res) {
+function handle_options(req, res) {
     console.log("OPTIONS request to patientService");
     // You must send something back to end the request
     res.send();
@@ -85,82 +85,105 @@ async function post_patient_view(req, res) {
     console.log("POST request to patientService");
     // Grab the request body parsed from body-parser
     const body = req.body;
-    // 
+    // Get the JWT auth token
     const auth = req.headers.authorization;
+    // Parse the JWT. It will be sent as "Bearer token_here"
     const auth_split = auth.split(" ");
-    const bearer_token = auth_split[1]
+    const bearer_token = auth_split[1];
 
-    console.log("\n\nChecking auth_token");
+    // Decode the JWT. We don't do any check with it right now...
     console.log(jwt.decode(bearer_token));
-    console.log("\n\n");
     
+    // If the hook doesn't match what we expect, something has gone wrong
     if (body.hook != "patient-view") {
-        console.log("BODY HOOK ISN'T RIGHT");
-        res.json({error: "Something is terrible here!"});
+        console.log("CDS Hook doesn't match what was expected: ", body.hook);
+        res.status(400).json({error: "CDS Hook doesn't match what was expected"});
         return;
     }
 
+    // Grab the fhirServer from the request. Points us towards the FHIR service for upcoming FHIR requests
     const root = body.fhirServer;
     const patient_id = body.context.patientId;
+    // Evaluates to https://some.fhir.server/version/.../Immunization
     const patient_url = `${root}/Immunization`;
-    console.log(patient_url);
 
+    // Use the request-promise package to call the FHIR server to get the Immunization record
     const immunizations = await rp({
+        // Set the Immunization URL
         uri: patient_url,
         method: "GET",
+        // This is required by the FHIR standard to identify the format of the request
         headers: {
             "Accept": "application/json+fhir",
         },
+        // Format the query parameters: ".../Immunization?patient=patient_id
         qs: {
             "patient": patient_id
         }
     })
+    // Parse stringified response
     .then(JSON.parse)
-    .then(print_then_return)
-    .then(record => { return (record.total == 0 ? _throw("No immmunization Record found") : record.entry) })
+    // If there is no Immunization record, then get out of the loop by throwing an error to go to the catch statement
+    // If there is an Immunization record, then return the list of Immunizations for in the entry element.
+    .then(record => (record.total == 0 ? _throw("No immmunization Record found") : record.entry))
+    // Sort the list by the vaccine Code text, so they appear in order to the user
     .then(l => l.sort((a, b) => {
         return a.resource.vaccineCode.text.localeCompare(b.resource.vaccineCode.text);
     }))
-    .then(print_then_return)
+    // Parse the list of immunizations
     .then(immun_list => {
+        // If the list is empty, then return early (should be caught above but you never know...)
         if (!immun_list || immun_list.length == 0)
             return [];
 
+        // Initialize the markdown string, we start with two table headers;
+        // Vaccination        Expiration Date
+        // ------------------ ----------------
         let markdown_result = "| Vaccination | Expiration Date |\n| :---: | :---: |\n";
+        // add to the result a stringified version of the object
+        // adds a row for vaccination, putting in the first column the name of the vaccination,
+        // and in the second column the expiration date of the vaccination. If that is empty, then some default text
         markdown_result += immun_list.map(val => {
             const exp_date = val.resource.expirationDate || "Does not expire";
             return `| ${val.resource.vaccineCode.text} | ${exp_date} |`;
         }).join("\n");
 
+        // then return the cards object with some required fields
         return [{
             summary: "This patient has received immunizations",
+            // Send the markdown result in detail
             detail:  markdown_result,
             source: {
-                label: "Local Immune Registry",
-                url:   "http://www.google.com"
+                label: "Your Immune Registry",
+                url:   ""
             },
+            // Only use info cards
             indicator: "info"
         }];
     })
+    // Wrap up the response in an object with a single element, cards
     .then(cards => {
         res.json({
             cards
         });
     })
     .catch(error => {
+        // If there was a problem, it is likely because we got out early, ie, there were no immune records.
+        // Either way, print the error, then return an empty object
         console.log(error);
         res.json({
             cards: []
         });
     });
-    console.log("ALL DONE!");
 }
 app.get("/test1/cds-services", handle_discovery);
-app.options("/test1/cds-services", handle_discovery);
+app.options("/test1/cds-services", handle_options);
 
 app.post("/test1/cds-services/patientService", post_patient_view);
-app.options("/test1/cds-services/patientService", options_patient_view);
+app.options("/test1/cds-services/patientService", handle_options);
 
+// Handle any other requests you weren't expecting. Only use this in testing. Remove before going forward. All scenarios should be handled properly
 app.all('*', handle_all);
+// Listen on 3000, this number is arbritrary, but should match NGINX config
 app.listen(3000);
 console.log("LISTENING ON 3000");
